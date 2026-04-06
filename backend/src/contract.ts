@@ -1,14 +1,4 @@
 import type { Hono } from "hono";
-
-/**
- * Interface for the logging service
- */
-export interface ILoggingService {
-    info(message: string): void;
-    warn(message: string): void;
-    error(message: string): void;
-}
-
 /**
  * Interface for the Hono app wrapper
  */
