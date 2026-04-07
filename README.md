@@ -1,12 +1,11 @@
-# Server Boilerplate
+# Claude Code HTTP Wrapper
 
-A TypeScript boilerplate for a [Hono](https://hono.dev) HTTP server with Prisma ORM, structured around a layered architecture with dependency injection and `Result<T, E>` error handling.
+A lightweight REST API that wraps the `claude` CLI, letting any HTTP client query Claude models without the Anthropic SDK. Built with [Hono](https://hono.dev) and TypeScript.
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org) v18+
-- [npm](https://npmjs.com) v9+
-- A PostgreSQL database (for Prisma)
+- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude --version` should work)
 
 ## Getting started
 
@@ -19,28 +18,20 @@ npm install
 
 ### 2. Configure environment
 
-Copy the example env file and fill in your values:
-
 ```bash
 cp .env.example .env
 ```
 
-| Variable       | Description                          | Default |
-|----------------|--------------------------------------|---------|
-| `PORT`         | Port the server listens on           | `3000`  |
-| `DATABASE_URL` | PostgreSQL connection string         | —       |
-| `FRONTEND_URL` | Allowed CORS origin                  | —       |
+| Variable        | Description                                                        | Default             |
+|-----------------|--------------------------------------------------------------------|---------------------|
+| `PORT`          | Port the server listens on                                         | `3000`              |
+| `URL`           | Base URL used in logs                                              | `http://localhost`  |
+| `CORS_ORIGINS`  | Comma-separated allowed origins (supports `*` wildcard in port)    | —                   |
+| `DEFAULT_MODEL` | Model used when none specified (`Haiku` or `Sonnet`)               | `Haiku`             |
 
-### 3. Set up the database
+### 3. Run the server
 
-```bash
-npm run db:generate   # generate Prisma client
-npm run db:migrate    # run migrations
-```
-
-### 4. Run the server
-
-**Development** (watch mode, restarts on file changes):
+**Development** (watch mode):
 
 ```bash
 npm run dev
@@ -53,12 +44,31 @@ npm run build
 npm start
 ```
 
-The server starts on `http://localhost:3000` by default.
+## Usage
+
+Send a prompt via POST and get the model's response:
+
+```bash
+curl -X POST http://localhost:7878/messages \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": {"content": "What is 2+2?"}, "options": {"model": "Sonnet"}}'
+# {"message":{"content":"4"}}
+```
+
+**Request body:**
+
+| Field                   | Type     | Required | Description                        |
+|-------------------------|----------|----------|------------------------------------|
+| `prompt.content`        | string   | yes      | The message to send                |
+| `options.model`         | string   | no       | `"Haiku"` or `"Sonnet"`            |
+| `options.system_prompt` | string   | no       | System prompt override             |
+
+**API docs:** Swagger UI is available at `http://localhost:<PORT>/ui`.
 
 ## Verify it's running
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:7878/health
 # {"status":"ok"}
 ```
 
@@ -68,20 +78,21 @@ curl http://localhost:3000/health
 backend/
 └── src/
     ├── app.ts              # Hono app — middleware and route registration
-    ├── server.ts           # Entry point — starts the HTTP server
-    ├── contract.ts         # Core interfaces: IApp, IServer, ILoggingService
+    ├── server.ts           # Entry point — wires dependencies, starts server
+    ├── contract.ts         # Core interfaces: IApp, IServer
     ├── lib/
     │   └── result.ts       # Result<T, E> type (Ok / Err)
     ├── types/
     │   ├── errors.ts       # BaseError and custom error classes
     │   └── schemas.ts      # Zod validation schemas
+    ├── config/
+    │   ├── env.ts          # Env var parsing and validation
+    │   └── openapi.ts      # OpenAPI spec for Swagger UI
+    ├── ai_models/
+    │   └── models.ts       # Model name → Claude model ID mapping
     ├── routes/             # Hono route files grouped by resource
-    ├── controller/         # Request/response handling
-    ├── services/           # Business logic
-    │   └── LoggingService.ts
-    ├── repository/         # Data access (Prisma wrappers)
-    └── prisma/
-        └── schema.prisma   # Prisma schema
+    ├── controllers/        # Request/response handling
+    └── services/           # Business logic (Claude CLI invocation, logging)
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for full architectural conventions and coding patterns.

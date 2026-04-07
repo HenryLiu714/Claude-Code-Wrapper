@@ -4,6 +4,8 @@ import { CreateApp } from "./app.js";
 import type { IApp, IServer } from "./contract.js";
 import { CreateLoggingService } from "./services/LoggingService.js";
 import { env } from "./config/env.js";
+import { CreateChatService } from "./services/ChatService.js";
+import { CreateChatController } from "./controllers/ChatController.js";
 
 const logger = CreateLoggingService();
 
@@ -25,6 +27,10 @@ export class HTTPServer implements IServer {
 }
 
 const PORT = env.PORT;
-const app = CreateApp(logger);
+
+const chatService = CreateChatService(logger);
+const chatController = CreateChatController(chatService, logger);
+
+const app = CreateApp(chatController,logger);
 const server = new HTTPServer(app);
 server.start(PORT);

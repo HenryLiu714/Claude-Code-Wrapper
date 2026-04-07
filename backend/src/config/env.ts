@@ -5,6 +5,7 @@ const envSchema = z.object({
   URL: z.string().default("http://localhost"),
   PORT: z.coerce.number().default(3000),
   CORS_ORIGINS: z.string().default("http://localhost:*"),
+  DEFAULT_MODEL: z.string().default("Haiku"),
 });
 
 export const env = envSchema.parse(process.env);

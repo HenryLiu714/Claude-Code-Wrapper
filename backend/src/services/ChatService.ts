@@ -1,12 +1,16 @@
 import type { ILoggingService } from "./LoggingService.js";
+import { exec } from "child_process";
 import type { Result } from "../lib/result.js";
-import type { ChatOptions, ChatRequest, Message } from "../types/schemas.js";
+import type { ChatOptions, Query, Message } from "../types/schemas.js";
 import { GoogleGenAI } from "@google/genai";
+import { env } from "../config/env.js";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 export interface IChatService {
     runQuery(
-        chatRequest: ChatRequest,
-        options?: ChatOptions
+        query: Query,
     ): Promise<Result<Message, Error>>;
 }
 
@@ -14,18 +18,44 @@ class ChatService {
     constructor(private readonly logger: ILoggingService) {}
 
     async runQuery(
-        chatRequest: ChatRequest,
-        options?: ChatOptions
+        query: Query,
     ): Promise<Result<Message, Error>> {
+        this.logger.info(`Running query with prompt: ${query.prompt.content}`);
+
+        const cmd = [
+            "claude",
+            "-p", JSON.stringify(query.prompt.content),
+            "--model", query.options?.model || env.DEFAULT_MODEL,
+            "--system-prompt", query.options?.system_prompt || "You are a helpful assistant.",
+            "--output-format", "json",
+            "--allowedTools", "none",
+            "--no-session-persistence",
+            "< /dev/null"
+        ].join(" ")
+
         try {
-            // Placeholder for actual implementation
-            const query: Message = {
-                role: "assistant",
-                content: "This is a placeholder response.",
+            const { stdout, stderr } = await execAsync(cmd, { cwd: "/tmp" });
+
+            if (stderr) {
+                this.logger.error(`Error from Claude CLI ${stderr}`);
+                return { ok: false, value: new Error(stderr) };
+            }
+
+            const response = JSON.parse(stdout);
+            const message: Message = {
+                content: response.result,
             };
-            return { ok: true, value: query };
-        } catch (error) {
-            return { ok: false, value: new Error("Failed to run query") };
+
+            return { ok: true, value: message };
+        }
+
+        catch (error) {
+            this.logger.error(`Error running query ${error instanceof Error ? error.message : "Unknown error"}`);
+            return { ok: false, value: error instanceof Error ? error : new Error("Unknown error") };
         }
     }
+}
+
+export function CreateChatService(logger: ILoggingService): ChatService {
+    return new ChatService(logger);
 }

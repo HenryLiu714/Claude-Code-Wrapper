@@ -1,6 +1,6 @@
-# Server Boilerplate — Hono Backend
+# Claude Code HTTP Wrapper — Hono Backend
 
-This is a TypeScript boilerplate for a Hono HTTP server with Prisma ORM. It is designed to be cloned and extended for new projects. Follow the patterns below consistently across the codebase.
+This is a TypeScript HTTP server that wraps the `claude` CLI as a REST API. It receives chat queries over HTTP and returns responses from Claude models by invoking the CLI as a subprocess. Follow the patterns below consistently across the codebase.
 
 ---
 
@@ -10,28 +10,29 @@ This is a TypeScript boilerplate for a Hono HTTP server with Prisma ORM. It is d
 src/
 ├── app.ts              — Hono app setup and middleware registration
 ├── server.ts           — HTTP server entry point
-├── contract.ts         — Core service interfaces (IApp, IServer, ILoggingService)
+├── contract.ts         — Core service interfaces (IApp, IServer)
 ├── lib/
 │   └── result.ts       — Result<T, E> type (Ok / Err)
 ├── types/
 │   ├── errors.ts       — BaseError and custom error classes
 │   └── schemas.ts      — Zod validation schemas
+├── config/
+│   ├── env.ts          — Env var parsing and validation
+│   └── openapi.ts      — OpenAPI spec for Swagger UI
+├── ai_models/
+│   └── models.ts       — Model name → Claude model ID mapping
 ├── routes/             — Hono route handlers grouped by resource
-├── controller/         — Request/response handling logic
-├── services/           — Business logic layer
-│   └── LoggingService.ts
-├── repository/         — Data access layer (Prisma wrappers)
-└── prisma/
-    └── schema.prisma   — Prisma schema
+├── controllers/        — Request/response handling logic
+└── services/           — Business logic layer (Claude CLI invocation, logging)
 ```
 
 Execution flows strictly top-down:
 
 ```
-Routes → Controllers → Services → Repositories → Prisma
+Routes → Controllers → Services
 ```
 
-Each layer only depends on the layer directly below it. No layer skips layers or imports from layers above it.
+Each layer only depends on the layer directly below it.
 
 ---
 
@@ -58,15 +59,12 @@ Each layer only depends on the layer directly below it. No layer skips layers or
 ```typescript
 import { Ok, Err, Result } from "../lib/result.js";
 
-async function findUser(id: string): Promise<Result<User, RecordError>> {
+async function runQuery(query: Query): Promise<Result<Message, Error>> {
   try {
-    const user = await prisma.user.findUniqueOrThrow({ where: { id } });
-    return Ok(user);
+    const { stdout } = await execAsync(cmd);
+    return Ok({ content: JSON.parse(stdout).result });
   } catch (e) {
-    if (e instanceof PrismaClientKnownRequestError && e.code === "P2025") {
-      return Err(new RecordNotFoundError("User not found"));
-    }
-    return Err(new RecordError("Failed to find user"));
+    return Err(e instanceof Error ? e : new Error("Unknown error"));
   }
 }
 ```
@@ -74,15 +72,14 @@ async function findUser(id: string): Promise<Result<User, RecordError>> {
 **Checking results:**
 
 ```typescript
-const result = await findUser(id);
+const result = await chatService.runQuery(query);
 if (!result.ok) {
-  // handle error: result.value is the error
-  return c.json({ error: result.value.message }, 404);
+  return c.json({ error: result.value.message }, 500);
 }
-// success: result.value is the data
+return c.json({ message: result.value });
 ```
 
-Never use `try/catch` in controllers or services for Prisma calls — that belongs in the repository layer. Services and controllers only check `.ok` on returned Results.
+Never use `try/catch` in controllers — that belongs in the service layer.
 
 ---
 
@@ -104,22 +101,18 @@ export abstract class BaseError extends Error {
 Define domain errors close to where they are used:
 
 ```typescript
-export class RecordNotFoundError extends BaseError {
-  readonly code = "NOT_FOUND";
-}
-
-export class RecordError extends BaseError {
-  readonly code = "ERROR";
+export class ServiceError extends BaseError {
+  readonly code = "SERVICE_ERROR";
 }
 ```
 
-Map error codes to HTTP status codes in controllers, not in repositories or services.
+Map error codes to HTTP status codes in controllers.
 
 ---
 
 ## Hono App Setup
 
-Use Hono instead of Express. The app class implements `IApp` from `contract.ts`.
+The app class implements `IApp` from `contract.ts`.
 
 ```typescript
 import { Hono } from "hono";
@@ -128,32 +121,25 @@ import { cors } from "hono/cors";
 export class HonoApp implements IApp {
   private readonly app: Hono;
 
-  constructor(private readonly logger: ILoggingService) {
+  constructor(private readonly chatController: IChatController, private readonly logger: ILoggingService) {
     this.app = new Hono();
     this.registerMiddleware();
     this.registerRoutes();
   }
 
   private registerMiddleware(): void {
-    this.app.use("*", cors({
-      origin: process.env.FRONTEND_URL ?? "",
-      allowMethods: ["GET", "POST", "PUT", "DELETE"],
-      allowHeaders: ["Content-Type", "Authorization"],
-    }));
+    this.app.use("*", cors({ /* ... */ }));
   }
 
   private registerRoutes(): void {
-    // mount route groups here
-    // e.g. this.app.route("/users", userRoutes);
+    this.app.route("/messages", createMessageRouter(this.chatController, this.logger));
+    this.app.get("/doc", (c) => c.json(openApiSpec));
+    this.app.get("/ui", swaggerUI({ url: "/doc" }));
   }
 
   getApp(): Hono {
     return this.app;
   }
-}
-
-export function CreateApp(logger: ILoggingService): HonoApp {
-  return new HonoApp(logger);
 }
 ```
 
@@ -161,27 +147,27 @@ export function CreateApp(logger: ILoggingService): HonoApp {
 
 ## Routes
 
-Group routes by resource in `src/routes/`. Each file exports a `Hono` instance.
+Group routes by resource in `src/routes/`. Each file exports a factory function returning a `Hono` instance.
 
 ```typescript
-// src/routes/users.ts
+// src/routes/messages.ts
 import { Hono } from "hono";
-import { UserController } from "../controller/UserController.js";
+import { zValidator } from "@hono/zod-validator";
+import { querySchema } from "../types/schemas.js";
 
-const router = new Hono();
-const controller = new UserController();
+export function createMessageRouter(controller: IChatController, logger: ILoggingService) {
+  const router = new Hono();
 
-router.get("/", (c) => controller.list(c));
-router.get("/:id", (c) => controller.getById(c));
-router.post("/", (c) => controller.create(c));
+  router.post("/", zValidator("json", querySchema), async (c) => {
+    const query = c.req.valid("json");
+    const result = await controller.handleChatRequest(query);
+    if (result.ok) return c.json({ message: result.value });
+    logger.error(`Error: ${result.value.message}`);
+    return c.json({ error: result.value.message }, 500);
+  });
 
-export default router;
-```
-
-Mount routes in `HonoApp.registerRoutes()`:
-
-```typescript
-this.app.route("/users", userRoutes);
+  return router;
+}
 ```
 
 ---
@@ -191,23 +177,11 @@ this.app.route("/users", userRoutes);
 Controllers handle HTTP concerns: parsing request input, calling services, and returning responses. They do not contain business logic.
 
 ```typescript
-export class UserController {
-  private readonly userService: IUserService;
+export class ChatController implements IChatController {
+  constructor(private readonly chatService: IChatService) {}
 
-  constructor(userService?: IUserService) {
-    this.userService = userService ?? CreateUserService();
-  }
-
-  async getById(c: Context): Promise<Response> {
-    const id = c.req.param("id");
-    const result = await this.userService.findById(id);
-
-    if (!result.ok) {
-      const status = result.value.code === "NOT_FOUND" ? 404 : 500;
-      return c.json({ error: result.value.message }, status);
-    }
-
-    return c.json(result.value);
+  async handleChatRequest(query: Query): Promise<Result<Message, Error>> {
+    return this.chatService.runQuery(query);
   }
 }
 ```
@@ -216,66 +190,54 @@ export class UserController {
 
 ## Services
 
-Services contain business logic. They accept plain data, call repositories, and return `Result<T, E>`.
+Services contain business logic. For this project the primary service invokes the `claude` CLI subprocess.
 
 ```typescript
-export interface IUserService {
-  findById(id: string): Promise<Result<User, RecordError>>;
-  create(data: UserCreateInput): Promise<Result<User, RecordError>>;
+export interface IChatService {
+  runQuery(query: Query): Promise<Result<Message, Error>>;
 }
 
-export class UserService implements IUserService {
-  constructor(private readonly repo: IUserRepository) {}
+export class ChatService implements IChatService {
+  constructor(private readonly logger: ILoggingService) {}
 
-  async findById(id: string): Promise<Result<User, RecordError>> {
-    return this.repo.findById(id);
+  async runQuery(query: Query): Promise<Result<Message, Error>> {
+    const cmd = [
+      "claude",
+      "-p", JSON.stringify(query.prompt.content),
+      "--model", query.options?.model || env.DEFAULT_MODEL,
+      "--output-format", "json",
+      "--allowedTools", "none",
+      "--no-session-persistence",
+      "< /dev/null",
+    ].join(" ");
+
+    try {
+      const { stdout, stderr } = await execAsync(cmd, { cwd: "/tmp" });
+      if (stderr) return Err(new Error(stderr));
+      return Ok({ content: JSON.parse(stdout).result });
+    } catch (e) {
+      return Err(e instanceof Error ? e : new Error("Unknown error"));
+    }
   }
-}
-
-export function CreateUserService(repo?: IUserRepository): IUserService {
-  return new UserService(repo ?? CreateUserRepository());
 }
 ```
 
 ---
 
-## Repositories
+## AI Models
 
-Repositories encapsulate all Prisma operations. They always return `Result<T, RecordError>`.
+Model name → Claude model ID mappings live in `src/ai_models/models.ts`. The `Models` array is used as the Zod enum for request validation.
 
 ```typescript
-export interface IUserRepository {
-  findById(id: string): Promise<Result<User | null, RecordError>>;
-  create(data: Prisma.UserCreateInput): Promise<Result<User, RecordError>>;
-  update(id: string, data: Prisma.UserUpdateInput): Promise<Result<User, RecordError>>;
-  delete(id: string): Promise<Result<void, RecordError>>;
-}
+export const ModelMap: { [key: string]: string } = {
+  "Haiku": "claude-haiku-4-5",
+  "Sonnet": "claude-sonnet-4-5",
+};
 
-export class UserRepository implements IUserRepository {
-  constructor(private readonly prisma: PrismaClient) {}
-
-  async findById(id: string): Promise<Result<User | null, RecordError>> {
-    try {
-      const user = await this.prisma.user.findUnique({ where: { id } });
-      return Ok(user);
-    } catch (e) {
-      return Err(this.toRecordError(e));
-    }
-  }
-
-  private toRecordError(e: unknown): RecordError {
-    if (e instanceof PrismaClientKnownRequestError) {
-      if (e.code === "P2025") return new RecordNotFoundError("Record not found");
-      if (e.code === "P2003") return new RecordError("Foreign key constraint failed");
-    }
-    return new RecordError("Database error");
-  }
-}
-
-export function CreateUserRepository(prisma?: PrismaClient): IUserRepository {
-  return new UserRepository(prisma ?? new PrismaClient());
-}
+export const Models = Object.keys(ModelMap);
 ```
+
+To add a new model, add an entry to `ModelMap`. No other changes are needed.
 
 ---
 
@@ -291,7 +253,7 @@ export interface ILoggingService {
 }
 ```
 
-The `ConsoleLoggingService` is a singleton obtained via `CreateLoggingService()`. Pass it as a constructor argument down the dependency chain.
+The `ConsoleLoggingService` is a singleton obtained via `CreateLoggingService()`.
 
 ---
 
@@ -300,22 +262,13 @@ The `ConsoleLoggingService` is a singleton obtained via `CreateLoggingService()`
 Use constructor injection throughout. Factory functions (`CreateX()`) create and wire dependencies.
 
 ```typescript
-// Bad: tightly coupled
-class UserService {
-  private repo = new UserRepository(new PrismaClient());
-}
-
 // Good: injected
-class UserService {
-  constructor(private readonly repo: IUserRepository) {}
+class ChatService {
+  constructor(private readonly logger: ILoggingService) {}
 }
-```
 
-Factory functions should default to production dependencies while allowing injection for testing:
-
-```typescript
-export function CreateUserService(repo?: IUserRepository): IUserService {
-  return new UserService(repo ?? CreateUserRepository());
+export function CreateChatService(logger: ILoggingService): IChatService {
+  return new ChatService(logger);
 }
 ```
 
@@ -326,52 +279,37 @@ export function CreateUserService(repo?: IUserRepository): IUserService {
 Define Zod schemas in `src/types/schemas.ts`. Derive TypeScript types from schemas.
 
 ```typescript
-import { z } from "zod";
-
-export const CreateUserSchema = z.object({
-  name: z.string().min(1),
-  email: z.email(),
+export const querySchema = z.object({
+  prompt: z.object({ content: z.string().min(1) }),
+  options: z.object({
+    system_prompt: z.string().optional(),
+    model: z.enum(Models).optional(),
+  }).optional(),
 });
 
-export type CreateUserInput = z.infer<typeof CreateUserSchema>;
+export type Query = z.infer<typeof querySchema>;
 ```
 
-Validate request bodies in controllers before passing data to services:
-
-```typescript
-const parsed = CreateUserSchema.safeParse(await c.req.json());
-if (!parsed.success) {
-  return c.json({ error: parsed.error.flatten() }, 400);
-}
-const result = await this.userService.create(parsed.data);
-```
-
----
-
-## Prisma Schema Conventions
-
-- Primary keys: `String @id @default(uuid())`
-- Timestamps: `createdAt DateTime @default(now())`
-- Cascade deletes on child records: `onDelete: Cascade`
-- JSON fields for flexible structures (headers, metadata): `Json?`
+Validate request bodies in routes using `zValidator` before passing data to controllers.
 
 ---
 
 ## Environment Variables
 
-| Variable       | Description                             |
-|----------------|-----------------------------------------|
-| `PORT`         | HTTP server port (default: `3000`)      |
-| `DATABASE_URL` | PostgreSQL connection string            |
-| `FRONTEND_URL` | CORS allowed origin                     |
+| Variable        | Description                                                     | Default            |
+|-----------------|-----------------------------------------------------------------|--------------------|
+| `PORT`          | HTTP server port                                                | `3000`             |
+| `URL`           | Base URL used in startup logs                                   | `http://localhost` |
+| `CORS_ORIGINS`  | Comma-separated allowed origins (supports `*` wildcard in port) | —                  |
+| `DEFAULT_MODEL` | Fallback model when none specified in request                   | `Haiku`            |
 
-Load via `import 'dotenv/config'` at the top of `server.ts`. Never hard-code secrets.
+Load via `import 'dotenv/config'` at the top of `server.ts`. Never hard-code secrets or access `process.env` outside of `config/env.ts`.
 
 ---
 
 ## File Naming and Module Imports
 
-- Files use PascalCase for classes (`UserService.ts`) and camelCase for utilities (`result.ts`)
+- Files use PascalCase for classes (`ChatService.ts`) and camelCase for utilities (`result.ts`)
 - Always use `.js` extensions in import paths (required for ESM with `nodenext`):
   ```typescript
   import { Ok, Err } from "../lib/result.js";
@@ -382,21 +320,19 @@ Load via `import 'dotenv/config'` at the top of `server.ts`. Never hard-code sec
 
 ## What Belongs Where
 
-| Layer        | Responsibility                                      | May not                                      |
-|--------------|-----------------------------------------------------|----------------------------------------------|
-| Route        | Mount controller methods, define URL shape          | Parse bodies, call services directly         |
-| Controller   | Parse input, call service, return HTTP response     | Contain business logic, touch Prisma         |
-| Service      | Business logic, orchestration, call repositories    | Parse HTTP, return `Response`                |
-| Repository   | Prisma operations only, return `Result<T, E>`       | Contain business logic, call other repos     |
+| Layer       | Responsibility                                      | May not                                  |
+|-------------|------------------------------------------------------|------------------------------------------|
+| Route       | Mount controller methods, validate request body      | Call services directly, contain logic   |
+| Controller  | Call service, return HTTP response                   | Contain business logic, parse HTTP body |
+| Service     | Business logic, CLI invocation, return `Result<T,E>` | Parse HTTP, return `Response`           |
 
 ---
 
 ## Common Mistakes to Avoid
 
-- Do not throw errors in services or repositories — return `Err(...)` instead
+- Do not throw errors in services — return `Err(...)` instead
 - Do not use `any` — use `unknown` and narrow
-- Do not skip the repository layer and call Prisma directly in services
-- Do not access `process.env` outside of `server.ts` and `app.ts` — pass config as arguments
+- Do not access `process.env` outside of `config/env.ts`
 - Do not use `console.log` — use the injected `ILoggingService`
 - Do not create helper utilities for single-use operations
-- Do not add optional features or abstractions not required by the task at hand
+- Do not add optional features or abstractions not required by the task

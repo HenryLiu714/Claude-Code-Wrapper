@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 
-const router = new Hono();
+export function createHealthRouter() {
+    const router = new Hono();
 
-router.get("/", (c) => {
-    return c.json({ status: "ok" });
-});
+    router.get("/", (c) => {
+        return c.json({ status: "ok" });
+    });
 
-export default router;
+    return router;
+}

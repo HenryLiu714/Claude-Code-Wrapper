@@ -2,9 +2,12 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { swaggerUI } from "@hono/swagger-ui";
 import { env } from "./config/env.js"
-import type { IApp, ILoggingService } from "./contract.js";
-import healthRoutes from "./routes/health.js";
+import type { IApp } from "./contract.js";
+import { createHealthRouter } from "./routes/health.js";
 import { openApiSpec } from "./config/openapi.js";
+import type { IChatController } from "./controllers/ChatController.js";
+import { createMessageRouter } from "./routes/messages.js";
+import type { ILoggingService } from "./services/LoggingService.js";
 
 const patterns = env.CORS_ORIGINS.split(",").map((origin) => {
   const escaped = origin.trim().replace(/\./g, "\\.").replace(/\*/g, "\\d+");
@@ -15,7 +18,7 @@ const patterns = env.CORS_ORIGINS.split(",").map((origin) => {
 export class HonoApp implements IApp {
     private readonly app: Hono;
 
-    constructor(private readonly logger: ILoggingService) {
+    constructor(private readonly chatController: IChatController, private readonly logger: ILoggingService) {
         this.app = new Hono();
         this.registerMiddleware();
         this.registerRoutes();
@@ -34,7 +37,10 @@ export class HonoApp implements IApp {
     }
 
     private registerRoutes(): void {
-        this.app.route("/health", healthRoutes);
+        this.app.route("/health", createHealthRouter());
+        this.app.route("/messages", createMessageRouter(this.chatController, this.logger));
+
+
         this.app.get("/doc", (c) => c.json(openApiSpec));
         this.app.get("/ui", swaggerUI({ url: "/doc" }));
     }
@@ -44,6 +50,6 @@ export class HonoApp implements IApp {
     }
 }
 
-export function CreateApp(logger: ILoggingService): HonoApp {
-    return new HonoApp(logger);
+export function CreateApp(chatController: IChatController, logger: ILoggingService): HonoApp {
+    return new HonoApp(chatController, logger);
 }
