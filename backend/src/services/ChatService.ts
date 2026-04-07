@@ -21,12 +21,22 @@ class ChatService {
         query: Query,
     ): Promise<Result<Message, Error>> {
         this.logger.info(`Running query with prompt: ${query.prompt.content}`);
+        
+        const base_system_prompt = query.options?.system_prompt || "You are a helpful assistant.";
+
+        let system_prompt = base_system_prompt;
+
+        if (query.options?.response_format?.type === "json") {
+            system_prompt += `${base_system_prompt} Always respond with valid JSON only, no markdown, no backticks. Your response must conform to this JSON schema: ${JSON.stringify(query.options.response_format.schema)}`;
+        }
+
+
 
         const cmd = [
             "claude",
             "-p", JSON.stringify(query.prompt.content),
             "--model", query.options?.model || env.DEFAULT_MODEL,
-            "--system-prompt", JSON.stringify(query.options?.system_prompt || "You are a helpful assistant."),
+            "--system-prompt", JSON.stringify(system_prompt),
             "--output-format", "json",
             "--allowedTools", "none",
             "--no-session-persistence",
