@@ -1,0 +1,17 @@
+services:
+  api:
+    build: ./backend
+    ports:
+      - "7878:7878"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ${HOME}/.claude:/root/.claude:ro
+    restart: unless-stopped
+    networks:
+      - claude-network
+
+networks:
+  claude-network:
+    name: claude-network
+    driver: bridge
