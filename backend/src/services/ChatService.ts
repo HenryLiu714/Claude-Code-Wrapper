@@ -14,6 +14,15 @@ export interface IChatService {
     ): Promise<Result<Message, Error>>;
 }
 
+function extractJson(raw: string): unknown {
+  const stripped = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  return JSON.parse(stripped);
+}
+
 class ChatService {
     constructor(private readonly logger: ILoggingService) {}
 
@@ -53,6 +62,16 @@ class ChatService {
             const message: Message = {
                 content: response.result,
             };
+
+            if (query.options?.response_format?.type === "json") {
+                try {
+                    const jsonContent = extractJson(response.result);
+                    message.content = JSON.stringify(jsonContent);
+                } catch (parseError) {
+                    this.logger.error(`Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : "Unknown error"}`);
+                    return { ok: false, value: new Error("Failed to parse JSON response") };
+                }
+            }
 
             return { ok: true, value: message };
         }
