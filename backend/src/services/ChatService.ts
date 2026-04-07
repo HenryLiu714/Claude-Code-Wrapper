@@ -26,7 +26,7 @@ class ChatService {
             "claude",
             "-p", JSON.stringify(query.prompt.content),
             "--model", query.options?.model || env.DEFAULT_MODEL,
-            "--system-prompt", query.options?.system_prompt || "You are a helpful assistant.",
+            "--system-prompt", JSON.stringify(query.options?.system_prompt || "You are a helpful assistant."),
             "--output-format", "json",
             "--allowedTools", "none",
             "--no-session-persistence",
