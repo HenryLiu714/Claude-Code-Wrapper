@@ -6,12 +6,12 @@ services:
     env_file:
       - ./backend/.env
     volumes:
-      - ${HOME}/.claude:/root/.claude:ro
+      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude.json:/root/.claude.json
     restart: unless-stopped
     networks:
-      - claude-network
+      - global-link
 
 networks:
-  claude-network:
-    name: claude-network
-    driver: bridge
+  global-link:
+    external: true
