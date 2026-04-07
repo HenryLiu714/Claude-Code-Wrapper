@@ -28,6 +28,17 @@ export const openApiSpec = {
                     properties: {
                       system_prompt: { type: "string" },
                       model: { type: "string", enum: ["Haiku", "Sonnet"] },
+                      response_format: {
+                        type: "object",
+                        properties: {
+                          type: { type: "string", enum: ["text", "json"], default: "text" },
+                          schema: {
+                            type: "object",
+                            additionalProperties: true,
+                            description: "JSON schema the response must conform to. Only used when type is \"json\".",
+                          },
+                        },
+                      },
                     },
                   },
                 },

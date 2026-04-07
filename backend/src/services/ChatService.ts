@@ -30,8 +30,6 @@ class ChatService {
             system_prompt += `${base_system_prompt} Always respond with valid JSON only, no markdown, no backticks. Your response must conform to this JSON schema: ${JSON.stringify(query.options.response_format.schema)}`;
         }
 
-
-
         const cmd = [
             "claude",
             "-p", JSON.stringify(query.prompt.content),
