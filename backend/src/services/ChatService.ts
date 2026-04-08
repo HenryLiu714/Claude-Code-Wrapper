@@ -42,7 +42,8 @@ class ChatService {
 
         let model = env.DEFAULT_MODEL;
 
-        if (query.options?.model && query.options.model in Models) {
+        if (query.options?.model) {
+            this.logger.info(`Using model from query options: ${query.options.model}`);
             model = ModelMap[query.options.model] || env.DEFAULT_MODEL;
         }
 
@@ -56,6 +57,8 @@ class ChatService {
             "--no-session-persistence",
             "< /dev/null"
         ].join(" ")
+
+        this.logger.info(`Executing command: ${cmd}`);
 
         try {
             const { stdout, stderr } = await execAsync(cmd, { cwd: "/tmp" });
