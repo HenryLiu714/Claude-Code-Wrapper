@@ -45,11 +45,11 @@ class ChatService {
         if (query.options?.model && query.options.model in Models) {
             model = ModelMap[query.options.model] || env.DEFAULT_MODEL;
         }
-        
+
         const cmd = [
             "claude",
             "-p", JSON.stringify(query.prompt.content),
-            "--model", query.options?.model || env.DEFAULT_MODEL,
+            "--model", JSON.stringify(model),
             "--system-prompt", JSON.stringify(system_prompt),
             "--output-format", "json",
             "--allowedTools", "none",
