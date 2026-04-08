@@ -5,6 +5,7 @@ import type { ChatOptions, Query, Message } from "../types/schemas.js";
 import { GoogleGenAI } from "@google/genai";
 import { env } from "../config/env.js";
 import { promisify } from "util";
+import { ModelMap, Models } from "../ai_models/models.js";
 
 const execAsync = promisify(exec);
 
@@ -39,6 +40,12 @@ class ChatService {
             system_prompt += `${base_system_prompt} Always respond with valid JSON only, no markdown, no backticks. Your response must conform to this JSON schema: ${JSON.stringify(query.options.response_format.schema)}`;
         }
 
+        let model = env.DEFAULT_MODEL;
+
+        if (query.options?.model && query.options.model in Models) {
+            model = ModelMap[query.options.model] || env.DEFAULT_MODEL;
+        }
+        
         const cmd = [
             "claude",
             "-p", JSON.stringify(query.prompt.content),
